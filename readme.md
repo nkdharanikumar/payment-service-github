@@ -530,19 +530,6 @@ http://localhost:3000
 
 ---
 
-# Screenshots to Include
-
-1. EKS Cluster
-2. ECR Repository
-3. GitHub Actions Success
-4. ArgoCD Healthy + Synced
-5. ServiceAccount IRSA Annotation
-6. Secrets Manager Secret
-7. ALB Ingress
-8. Payment Service Running
-9. Grafana Dashboard
-
----
 
 # Key Learnings
 
