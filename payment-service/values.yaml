@@ -1,0 +1,32 @@
+replicaCount: 1
+
+image:
+  repository: 324621154851.dkr.ecr.ap-south-1.amazonaws.com/payment-service
+  pullPolicy: IfNotPresent
+  tag: "v1"
+
+service:
+  type: LoadBalancer
+  port: 80
+
+containerPort: 8080
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+ingress:
+  enabled: false
+
+resources: {}
+
+autoscaling:
+  enabled: false
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
