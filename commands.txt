@@ -1,0 +1,360 @@
+
+EKS APPLICATION DEPLOYMENT VIA GITOPS - COMMAND REFERENCE
+=========================================================
+
+This document contains the major AWS, EKS, kubectl, Helm and monitoring commands used during the project in execution order.
+
+------------------------------------------------------------------
+1. EKS CLUSTER CREATION
+------------------------------------------------------------------
+
+Create Cluster
+
+eksctl create cluster \
+  --name payment-cluster \
+  --region ap-south-1 \
+  --nodes 2 \
+  --node-type t3.medium
+
+Verify Cluster
+
+kubectl get nodes
+
+Purpose:
+Creates an EKS cluster with worker nodes.
+
+------------------------------------------------------------------
+2. ECR REPOSITORY
+------------------------------------------------------------------
+
+Create ECR Repository
+
+aws ecr create-repository \
+  --repository-name payment-service \
+  --region ap-south-1
+
+Login to ECR
+
+aws ecr get-login-password --region ap-south-1 | \
+docker login --username AWS --password-stdin \
+<account-id>.dkr.ecr.ap-south-1.amazonaws.com
+
+List Images
+
+aws ecr list-images \
+  --repository-name payment-service \
+  --region ap-south-1
+
+Purpose:
+Stores container images.
+
+------------------------------------------------------------------
+3. KUBERNETES DEPLOYMENT VALIDATION
+------------------------------------------------------------------
+
+Check Deployments
+
+kubectl get deployment
+
+Check Pods
+
+kubectl get pods
+
+Check Services
+
+kubectl get svc
+
+Check Endpoints
+
+kubectl get endpoints payment-service
+
+Describe Service
+
+kubectl describe svc payment-service
+
+Purpose:
+Validates application deployment and networking.
+
+------------------------------------------------------------------
+4. ARGOCD INSTALLATION
+------------------------------------------------------------------
+
+Create Namespace
+
+kubectl create namespace argocd
+
+Install ArgoCD
+
+helm repo add argo https://argoproj.github.io/argo-helm
+
+helm repo update
+
+helm install argocd argo/argo-cd -n argocd
+
+Check Pods
+
+kubectl get pods -n argocd
+
+Get Admin Password
+
+kubectl -n argocd get secret argocd-initial-admin-secret \
+-o jsonpath="{.data.password}" | base64 -d
+
+Port Forward
+
+kubectl port-forward svc/argocd-server -n argocd 8080:443
+
+Check Applications
+
+kubectl get applications -n argocd
+
+Purpose:
+Implements GitOps deployment model.
+
+------------------------------------------------------------------
+5. OIDC CONFIGURATION
+------------------------------------------------------------------
+
+Get Cluster OIDC
+
+aws eks describe-cluster \
+  --name payment-cluster \
+  --region ap-south-1 \
+  --query "cluster.identity.oidc.issuer" \
+  --output text
+
+List Existing Providers
+
+aws iam list-open-id-connect-providers
+
+Associate OIDC
+
+eksctl utils associate-iam-oidc-provider \
+  --region ap-south-1 \
+  --cluster payment-cluster \
+  --approve
+
+Purpose:
+Required for IRSA.
+
+------------------------------------------------------------------
+6. AWS SECRETS MANAGER
+------------------------------------------------------------------
+
+Create Secret
+
+aws secretsmanager create-secret \
+  --name payment-service-secret \
+  --secret-string '{"db_password":"supersecret123"}' \
+  --region ap-south-1
+
+Retrieve Secret
+
+aws secretsmanager get-secret-value \
+  --secret-id payment-service-secret \
+  --region ap-south-1
+
+Purpose:
+Stores sensitive application data securely.
+
+------------------------------------------------------------------
+7. IRSA (IAM ROLE FOR SERVICE ACCOUNT)
+------------------------------------------------------------------
+
+Create Policy File
+
+cat > secrets-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+EOF
+
+Create IAM Policy
+
+aws iam create-policy \
+  --policy-name PaymentServiceSecretsPolicy \
+  --policy-document file://secrets-policy.json
+
+Create IAM Service Account
+
+eksctl create iamserviceaccount \
+  --name payment-service \
+  --namespace default \
+  --cluster payment-cluster \
+  --attach-policy-arn <policy-arn> \
+  --approve \
+  --override-existing-serviceaccounts
+
+Verify Service Account
+
+kubectl get sa payment-service -o yaml
+
+Purpose:
+Allows pods to access AWS services securely without AWS keys.
+
+------------------------------------------------------------------
+8. AWS LOAD BALANCER CONTROLLER
+------------------------------------------------------------------
+
+Download IAM Policy
+
+curl -O https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/main/docs/install/iam_policy.json
+
+Create IAM Policy
+
+aws iam create-policy \
+  --policy-name AWSLoadBalancerControllerIAMPolicy \
+  --policy-document file://iam_policy.json
+
+Create Controller Service Account
+
+eksctl create iamserviceaccount \
+  --cluster payment-cluster \
+  --namespace kube-system \
+  --name aws-load-balancer-controller \
+  --attach-policy-arn <policy-arn> \
+  --approve
+
+Add Helm Repo
+
+helm repo add eks https://aws.github.io/eks-charts
+
+helm repo update
+
+Install Controller
+
+helm install aws-load-balancer-controller \
+eks/aws-load-balancer-controller \
+-n kube-system \
+--set clusterName=payment-cluster \
+--set serviceAccount.create=false \
+--set serviceAccount.name=aws-load-balancer-controller \
+--set region=ap-south-1
+
+Verify Deployment
+
+kubectl get deployment -n kube-system aws-load-balancer-controller
+
+Verify Pods
+
+kubectl get pods -n kube-system | grep aws-load-balancer-controller
+
+Purpose:
+Creates and manages AWS ALBs from Kubernetes Ingress resources.
+
+------------------------------------------------------------------
+9. ALB INGRESS
+------------------------------------------------------------------
+
+Apply Ingress
+
+kubectl apply -f ingress.yaml
+
+View Ingress
+
+kubectl get ingress
+
+Describe Ingress
+
+kubectl describe ingress payment-service-ingress
+
+Get ALB Hostname
+
+kubectl get ingress payment-service-ingress \
+-o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+
+DNS Validation
+
+nslookup <alb-hostname>
+
+Test Application
+
+curl http://<alb-hostname>
+
+Purpose:
+Exposes application through AWS Application Load Balancer.
+
+------------------------------------------------------------------
+10. GRAFANA + PROMETHEUS
+------------------------------------------------------------------
+
+Create Namespace
+
+kubectl create namespace monitoring
+
+Add Repo
+
+helm repo add prometheus-community \
+https://prometheus-community.github.io/helm-charts
+
+helm repo update
+
+Install Stack
+
+helm install monitoring \
+prometheus-community/kube-prometheus-stack \
+-n monitoring
+
+Check Pods
+
+kubectl get pods -n monitoring
+
+Get Grafana Password
+
+kubectl get secret monitoring-grafana \
+-n monitoring \
+-o jsonpath="{.data.admin-password}" | base64 -d
+
+Access Grafana
+
+kubectl port-forward svc/monitoring-grafana \
+-n monitoring 3000:80
+
+Purpose:
+Provides monitoring and observability.
+
+------------------------------------------------------------------
+11. COMMON TROUBLESHOOTING COMMANDS
+------------------------------------------------------------------
+
+Current Context
+
+kubectl config current-context
+
+List Clusters
+
+aws eks list-clusters --region ap-south-1
+
+Cluster Details
+
+aws eks describe-cluster \
+  --name payment-cluster \
+  --region ap-south-1
+
+All Services
+
+kubectl get svc -A
+
+All Pods
+
+kubectl get pods -A
+
+All Ingresses
+
+kubectl get ingress -A
+
+Helm Releases
+
+helm list -A
+
+Purpose:
+Used throughout the project for debugging and validation.
